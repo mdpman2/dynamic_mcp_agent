@@ -1,0 +1,44 @@
+# Dynamic MCP Agent - Azure Based
+# Python dependencies
+
+# Core dependencies
+openai>=1.0.0
+python-dotenv>=1.0.0
+
+# BM25 for keyword search
+rank-bm25>=0.2.2
+
+# NumPy for embedding vector operations
+numpy>=1.24.0
+
+# Async HTTP client (MCP Registry API)
+aiohttp>=3.9.0
+
+# ============================================
+# Sentence-Transformers (다국어 로컬 임베딩)
+# ============================================
+# 한국어/영어/다국어 시맨틱 검색 지원
+# 기본 모델: paraphrase-multilingual-MiniLM-L12-v2
+sentence-transformers>=2.2.0
+torch>=2.0.0
+
+# ============================================
+# Azure SDK (Optional - uncomment as needed)
+# ============================================
+# azure-search-documents>=11.4.0
+# azure-storage-blob>=12.19.0
+# azure-cosmos>=4.5.0
+# azure-ai-textanalytics>=5.3.0
+# azure-ai-formrecognizer>=3.3.0
+# azure-cognitiveservices-speech>=1.35.0
+# azure-ai-translation-text>=1.0.0
+# azure-ai-vision-imageanalysis>=1.0.0
+
+# Development dependencies
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+black>=23.0.0
+isort>=5.12.0
+
+# Gradio for web interface (Optional)
+gradio>=4.0.0
