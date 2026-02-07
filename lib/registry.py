@@ -9,7 +9,12 @@ Advanced Hybrid Tool Registry with Multi-layer Search
 1️⃣ BM25 (빠르고 무료) - 키워드 매칭
 2️⃣ Sentence-Transformers (로컬, 다국어) - 의미론적 유사성
 3️⃣ MCP Registry API (공식) - 외부 도구 발견
-4️⃣ LLM 추론 (GPT-4.1) - 복잡한 쿼리 해석 (필요시에만)
+4️⃣ LLM 추론 (GPT-5) - 복잡한 쿼리 해석 (필요시에만)
+
+v2.0.0 업데이트 (2026-02-07):
+- [BREAKING] AzureOpenAI 클라이언트 → OpenAI + base_url 방식으로 전환
+- [CHANGED] LLM 검색 기본 모델 gpt-4.1 → gpt-5
+- [CHANGED] 기본 API 버전 2024-08-01-preview → preview
 
 참고: https://github.com/modelcontextprotocol/registry
 """
@@ -25,7 +30,7 @@ from typing import Dict, List, Any, Optional, Tuple, TYPE_CHECKING
 from pathlib import Path
 
 from rank_bm25 import BM25Okapi
-from openai import AzureOpenAI
+from openai import OpenAI
 from dotenv import load_dotenv
 
 if TYPE_CHECKING:
@@ -51,6 +56,10 @@ except ImportError:
 env_path = Path(__file__).parent.parent / ".env"
 load_dotenv(dotenv_path=env_path, override=True)
 logger = logging.getLogger(__name__)
+
+# 사전 컴파일된 정규식 패턴 (토큰화 성능 최적화)
+_RE_KOREAN = re.compile(r'[\uac00-\ud7a3]+')
+_RE_ENGLISH = re.compile(r'[a-z0-9]+')
 
 
 class MCPRegistryClient:
@@ -179,7 +188,7 @@ class HybridToolRegistry:
     1. BM25 (키워드 매칭) - 빠르고 무료
     2. Sentence-Transformers (로컬 임베딩) - 다국어 지원, 의미론적
     3. MCP Registry API (외부) - 새로운 도구 발견
-    4. GPT-4.1 LLM (추론) - 복잡한 쿼리
+    4. GPT-5 LLM (추론) - 복잡한 쿼리
     
     Attributes:
         _tools: 도구 이름을 키로 하는 도구 딕셔너리
@@ -238,12 +247,12 @@ class HybridToolRegistry:
         if enable_mcp_registry:
             self._mcp_registry = MCPRegistryClient(cache_ttl=mcp_registry_cache_ttl)
         
-        # Azure OpenAI 클라이언트 (LLM용)
+        # Azure OpenAI v1 API 클라이언트 (LLM용)
         self._azure_endpoint = azure_endpoint or os.getenv("AZURE_OPENAI_ENDPOINT")
         self._api_key = api_key or os.getenv("AZURE_OPENAI_API_KEY")
-        self._api_version = api_version or os.getenv("AZURE_OPENAI_API_VERSION", "2024-08-01-preview")
-        self._llm_model = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-4.1")
-        self._openai_client: Optional[AzureOpenAI] = None
+        self._api_version = api_version or os.getenv("AZURE_OPENAI_API_VERSION", "preview")
+        self._llm_model = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-5")
+        self._openai_client: Optional[OpenAI] = None
         self._init_openai_client()
         
         # 검색 통계
@@ -275,15 +284,16 @@ class HybridToolRegistry:
             self._sentence_model = None
     
     def _init_openai_client(self) -> None:
-        """Azure OpenAI 클라이언트를 초기화합니다."""
+        """Azure OpenAI v1 API 클라이언트를 초기화합니다."""
         if self._azure_endpoint and self._api_key:
             try:
-                self._openai_client = AzureOpenAI(
-                    azure_endpoint=self._azure_endpoint,
+                base_url = f"{self._azure_endpoint.rstrip('/')}/openai/v1/"
+                self._openai_client = OpenAI(
                     api_key=self._api_key,
-                    api_version=self._api_version
+                    base_url=base_url,
+                    default_query={"api-version": self._api_version}
                 )
-                logger.info("Azure OpenAI 클라이언트 초기화 성공 (LLM용)")
+                logger.info(f"Azure OpenAI v1 API 클라이언트 초기화 성공 (LLM용, api-version={self._api_version})")
             except Exception as e:
                 logger.warning(f"Azure OpenAI 클라이언트 초기화 실패: {e}")
                 self._openai_client = None
@@ -350,6 +360,58 @@ class HybridToolRegistry:
         
         logger.debug(f"도구 등록됨: {name}")
     
+    def register_batch(
+        self,
+        tools: List[tuple],
+    ) -> None:
+        """
+        여러 도구를 일괄 등록합니다. (인덱스 재구축은 마지막에 1회만 수행)
+        
+        Args:
+            tools: (tool, name, description, category, tags) 튜플 리스트
+        """
+        for entry in tools:
+            tool = entry[0]
+            name = entry[1] if len(entry) > 1 else None
+            description = entry[2] if len(entry) > 2 else None
+            category = entry[3] if len(entry) > 3 else None
+            tags = entry[4] if len(entry) > 4 else None
+            
+            # 도구 이름 추출
+            if name is None:
+                if hasattr(tool, 'name'):
+                    name = tool.name
+                elif hasattr(tool, '__name__'):
+                    name = tool.__name__
+                else:
+                    name = str(tool)
+            
+            # 설명 추출
+            if description is None:
+                if hasattr(tool, 'description'):
+                    description = tool.description or ""
+                else:
+                    description = inspect.getdoc(tool) or ""
+            
+            tag_string = " ".join(tags) if tags else ""
+            category_string = category if category else ""
+            searchable_text = f"{name} {description} {category_string} {tag_string}"
+            
+            self._tools[name] = tool
+            self._tool_names.append(name)
+            self._descriptions.append(searchable_text)
+            self._tool_metadata[name] = {
+                "description": description,
+                "category": category,
+                "tags": tags or [],
+                "searchable_text": searchable_text
+            }
+        
+        # 인덱스 재구축은 마지막에 1회만
+        self._rebuild_bm25_index()
+        self._sentence_embeddings = None
+        logger.info(f"도구 일괄 등록 완료: {len(tools)}개")
+    
     def _rebuild_bm25_index(self) -> None:
         """BM25 인덱스를 재구축합니다."""
         if not self._descriptions:
@@ -362,19 +424,20 @@ class HybridToolRegistry:
     def _tokenize(self, text: str) -> List[str]:
         """
         텍스트를 토큰으로 분리합니다. (한국어/영어 지원)
+        사전 컴파일된 정규식 패턴을 사용하여 성능을 최적화합니다.
         """
         text = text.lower().replace("_", " ").replace("-", " ")
         tokens = []
         
         # 한글 토큰 추출 (음절 + 바이그램)
-        for match in re.finditer(r'[가-힣]+', text):
+        for match in _RE_KOREAN.finditer(text):
             word = match.group()
             tokens.append(word)
             if len(word) >= 2:
                 tokens.extend(word[i:i+2] for i in range(len(word) - 1))
         
         # 영어 토큰 추출
-        tokens.extend(match.group() for match in re.finditer(r'[a-z0-9]+', text))
+        tokens.extend(match.group() for match in _RE_ENGLISH.finditer(text))
         
         return tokens
     
@@ -465,7 +528,10 @@ class HybridToolRegistry:
     # =========================================================================
     
     def _llm_search(self, query: str, candidates: List[str], top_k: int = 5) -> List[str]:
-        """LLM을 사용하여 가장 적합한 도구를 선택합니다."""
+        """
+        LLM을 사용하여 가장 적합한 도구를 선택합니다.
+        Responses API를 사용하여 도구 선택을 수행합니다.
+        """
         if not self._openai_client:
             return candidates[:top_k]
         
@@ -491,17 +557,15 @@ class HybridToolRegistry:
 예시 응답: azure_translator_tool, azure_text_analytics_tool"""
 
         try:
-            response = self._openai_client.chat.completions.create(
+            # Responses API 사용 (v2.0 통일)
+            response = self._openai_client.responses.create(
                 model=self._llm_model,
-                messages=[
-                    {"role": "system", "content": "당신은 사용자 요청에 가장 적합한 도구를 선택하는 전문가입니다. 한국어와 영어 쿼리를 모두 이해하고, 정확한 도구를 추천합니다."},
-                    {"role": "user", "content": prompt}
-                ],
+                instructions="당신은 사용자 요청에 가장 적합한 도구를 선택하는 전문가입니다. 한국어와 영어 쿼리를 모두 이해하고, 정확한 도구를 추천합니다.",
+                input=[{"role": "user", "content": prompt}],
                 temperature=0.0,
-                max_tokens=200
             )
             
-            result = response.choices[0].message.content or ""
+            result = response.output_text or ""
             selected_tools = [t.strip() for t in result.split(",")]
             valid_tools = [t for t in selected_tools if t in self._tools]
             
@@ -585,13 +649,10 @@ class HybridToolRegistry:
     
     def _format_results(self, results: List[Tuple[str, float]]) -> List[str]:
         """검색 결과를 포맷팅합니다."""
-        formatted = []
-        for name, score in results:
-            metadata = self._tool_metadata.get(name, {})
-            description = metadata.get("description", "")
-            summary = description.split('\n')[0][:150]
-            formatted.append(f"{name}: {summary}")
-        return formatted
+        return [
+            f"{name}: {self._tool_metadata.get(name, {}).get('description', '').split(chr(10))[0][:150]}"
+            for name, _score in results
+        ]
     
     def search(
         self, 
@@ -687,9 +748,12 @@ class HybridToolRegistry:
         total = stats["total_searches"]
         if total > 0:
             stats["bm25_ratio"] = f"{stats['bm25_hits'] / total * 100:.1f}%"
-            stats["sentence_ratio"] = f"{stats['sentence_hits'] / total * 100:.1f}%"
+            stats["embedding_ratio"] = f"{stats['sentence_hits'] / total * 100:.1f}%"
+            stats["embedding_hits"] = stats["sentence_hits"]  # 호환성 별칭
             stats["mcp_registry_ratio"] = f"{stats['mcp_registry_hits'] / total * 100:.1f}%"
             stats["llm_ratio"] = f"{stats['llm_hits'] / total * 100:.1f}%"
+        else:
+            stats["embedding_hits"] = 0
         return stats
     
     def set_thresholds(

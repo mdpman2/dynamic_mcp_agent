@@ -1,8 +1,9 @@
-# Dynamic MCP Agent - Azure Based
-# Python dependencies
+# Dynamic MCP Agent - Azure Based (v1 Responses API)
+# Python dependencies (2026 Updated)
 
 # Core dependencies
-openai>=1.0.0
+# openai >= 1.86 required for v1 Responses API support
+openai>=1.86.0
 python-dotenv>=1.0.0
 
 # BM25 for keyword search
@@ -25,20 +26,23 @@ torch>=2.0.0
 # ============================================
 # Azure SDK (Optional - uncomment as needed)
 # ============================================
-# azure-search-documents>=11.4.0
-# azure-storage-blob>=12.19.0
-# azure-cosmos>=4.5.0
+# azure-identity>=1.17.0        # Microsoft Entra ID 인증
+# azure-search-documents>=11.6.0
+# azure-storage-blob>=12.22.0
+# azure-cosmos>=4.7.0
 # azure-ai-textanalytics>=5.3.0
 # azure-ai-formrecognizer>=3.3.0
-# azure-cognitiveservices-speech>=1.35.0
+# azure-cognitiveservices-speech>=1.40.0
 # azure-ai-translation-text>=1.0.0
 # azure-ai-vision-imageanalysis>=1.0.0
+# azure-ai-projects>=1.0.0      # Azure AI Foundry SDK
 
 # Development dependencies
 pytest>=7.4.0
 pytest-asyncio>=0.21.0
-black>=23.0.0
+black>=24.0.0
 isort>=5.12.0
+ruff>=0.8.0
 
 # Gradio for web interface (Optional)
-gradio>=4.0.0
+gradio>=5.0.0

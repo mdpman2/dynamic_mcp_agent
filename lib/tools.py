@@ -1,14 +1,28 @@
 # -*- coding: utf-8 -*-
 """
-Dynamic Tool Loading Functions for Azure-based MCP Agent
+Dynamic Tool Loading Functions for Azure-based MCP Agent (v1 Responses API)
 
 이 모듈은 다양한 MCP 도구들을 동적으로 로드하고 관리하는 기능을 제공합니다.
 Azure OpenAI, Azure AI Search, Azure Functions 등 다양한 Azure 서비스와 통합됩니다.
 
-참고: https://medium.com/google-cloud/implementing-anthropic-style-dynamic-tool-search-tool-f39d02a35139
+v2.0.0 업데이트 (2026-02-07):
+- [NEW] azure_ai_foundry_agent_tool: Azure AI Foundry Agent 멀티스텝 작업
+- [NEW] azure_deep_research_tool: o3-deep-research 기반 심층 조사
+- [NEW] azure_web_search_tool: Responses API 내장 웹 검색 (web_search_preview)
+- [NEW] azure_code_interpreter_tool: Responses API 코드 인터프리터
+- [NEW] azure_image_generation_tool: GPT-Image 모델 이미지 생성
+- [CHANGED] azure_openai_embedding_tool 기본 모델 text-embedding-3-large (3072차원)
+- [CHANGED] TOOL_DEFINITIONS 15개 → 20개로 확장
+
+참고:
+- https://learn.microsoft.com/en-us/azure/ai-foundry/openai/how-to/responses
+- https://medium.com/google-cloud/implementing-anthropic-style-dynamic-tool-search-tool-f39d02a35139
 """
 
 import os
+import math
+import operator
+import ast
 import logging
 import asyncio
 from typing import List, Dict, Any, Optional, Callable
@@ -139,14 +153,14 @@ def azure_cosmos_db_tool(
 
 def azure_openai_embedding_tool(
     text: str,
-    model: str = "text-embedding-3-small"
+    model: str = "text-embedding-3-large"
 ) -> Dict[str, Any]:
     """
     Azure OpenAI를 사용하여 텍스트 임베딩을 생성합니다.
     
     Args:
         text: 임베딩할 텍스트
-        model: 사용할 임베딩 모델
+        model: 사용할 임베딩 모델 (text-embedding-3-small, text-embedding-3-large)
     
     Returns:
         임베딩 벡터를 포함하는 딕셔너리
@@ -154,7 +168,7 @@ def azure_openai_embedding_tool(
     return {
         "text": text[:50] + "..." if len(text) > 50 else text,
         "model": model,
-        "embedding_dimension": 1536,
+        "embedding_dimension": 3072 if "large" in model else 1536,
         "message": "Azure OpenAI Embedding 도구가 실행되었습니다."
     }
 
@@ -381,9 +395,59 @@ def calculator_tool(
     Returns:
         계산 결과를 포함하는 딕셔너리
     """
+    # 허용된 안전한 수학 연산자 및 함수
+    _SAFE_OPERATORS = {
+        ast.Add: operator.add,
+        ast.Sub: operator.sub,
+        ast.Mult: operator.mul,
+        ast.Div: operator.truediv,
+        ast.FloorDiv: operator.floordiv,
+        ast.Mod: operator.mod,
+        ast.Pow: operator.pow,
+        ast.USub: operator.neg,
+        ast.UAdd: operator.pos,
+    }
+    _SAFE_FUNCTIONS = {
+        'abs': abs, 'round': round, 'min': min, 'max': max,
+        'sqrt': math.sqrt, 'log': math.log, 'log10': math.log10,
+        'sin': math.sin, 'cos': math.cos, 'tan': math.tan,
+        'pi': math.pi, 'e': math.e,
+    }
+    
+    def _safe_eval(node):
+        """AST 노드를 안전하게 평가합니다."""
+        if isinstance(node, ast.Expression):
+            return _safe_eval(node.body)
+        elif isinstance(node, ast.Constant):
+            if isinstance(node.value, (int, float, complex)):
+                return node.value
+            raise ValueError(f"허용되지 않는 값: {node.value}")
+        elif isinstance(node, ast.BinOp):
+            op = _SAFE_OPERATORS.get(type(node.op))
+            if op is None:
+                raise ValueError(f"허용되지 않는 연산자: {type(node.op).__name__}")
+            return op(_safe_eval(node.left), _safe_eval(node.right))
+        elif isinstance(node, ast.UnaryOp):
+            op = _SAFE_OPERATORS.get(type(node.op))
+            if op is None:
+                raise ValueError(f"허용되지 않는 연산자: {type(node.op).__name__}")
+            return op(_safe_eval(node.operand))
+        elif isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name) and node.func.id in _SAFE_FUNCTIONS:
+                args = [_safe_eval(arg) for arg in node.args]
+                return _SAFE_FUNCTIONS[node.func.id](*args)
+            raise ValueError(f"허용되지 않는 함수: {getattr(node.func, 'id', '?')}")
+        elif isinstance(node, ast.Name):
+            if node.id in _SAFE_FUNCTIONS:
+                val = _SAFE_FUNCTIONS[node.id]
+                if isinstance(val, (int, float)):
+                    return val
+            raise ValueError(f"허용되지 않는 이름: {node.id}")
+        raise ValueError(f"허용되지 않는 표현식: {type(node).__name__}")
+    
     try:
-        # 안전한 계산 (eval 대신 더 안전한 방법 사용 권장)
-        result = eval(expression, {"__builtins__": {}}, {})
+        tree = ast.parse(expression, mode='eval')
+        result = _safe_eval(tree)
         return {
             "expression": expression,
             "result": result,
@@ -395,6 +459,141 @@ def calculator_tool(
             "error": str(e),
             "message": "계산 중 오류가 발생했습니다."
         }
+
+
+# ============================================================================
+# 2026 신규 도구: Azure AI Foundry / Responses API 네이티브 기능
+# ============================================================================
+
+def azure_ai_foundry_agent_tool(
+    task: str,
+    agent_name: str = "default-agent",
+    max_steps: int = 10
+) -> Dict[str, Any]:
+    """
+    Azure AI Foundry Agent를 호출하여 복잡한 멀티스텝 작업을 수행합니다.
+    
+    Args:
+        task: 수행할 작업 설명
+        agent_name: 사용할 에이전트 이름
+        max_steps: 최대 실행 단계 수
+    
+    Returns:
+        에이전트 실행 결과를 포함하는 딕셔너리
+    """
+    return {
+        "task": task,
+        "agent_name": agent_name,
+        "max_steps": max_steps,
+        "status": "completed",
+        "message": "Azure AI Foundry Agent 도구가 실행되었습니다."
+    }
+
+
+def azure_deep_research_tool(
+    query: str,
+    sources: Optional[List[str]] = None,
+    depth: str = "standard"
+) -> Dict[str, Any]:
+    """
+    Azure OpenAI Deep Research를 사용하여 심층 조사를 수행합니다.
+    o3-deep-research 모델을 활용하여 웹 검색, 코드 실행 등 종합적인 리서치를 수행합니다.
+    
+    Args:
+        query: 조사할 주제
+        sources: 참조할 데이터 소스 목록
+        depth: 조사 깊이 (quick, standard, thorough)
+    
+    Returns:
+        조사 결과를 포함하는 딕셔너리
+    """
+    return {
+        "query": query,
+        "sources": sources or [],
+        "depth": depth,
+        "results": {},
+        "message": "Azure Deep Research 도구가 실행되었습니다."
+    }
+
+
+def azure_web_search_tool(
+    query: str,
+    search_context_size: str = "medium",
+    user_location: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Responses API 내장 웹 검색 도구를 사용하여 실시간 웹 정보를 검색합니다.
+    web_search_preview 내장 도구를 에이전트 워크플로우에서 호출합니다.
+    
+    Args:
+        query: 검색 쿼리
+        search_context_size: 검색 컨텍스트 크기 (low, medium, high)
+        user_location: 사용자 위치 (검색 결과 최적화용)
+    
+    Returns:
+        검색 결과를 포함하는 딕셔너리
+    """
+    return {
+        "query": query,
+        "search_context_size": search_context_size,
+        "user_location": user_location,
+        "results": [],
+        "message": "Azure 웹 검색 도구가 실행되었습니다."
+    }
+
+
+def azure_code_interpreter_tool(
+    code: str,
+    language: str = "python",
+    files: Optional[List[str]] = None
+) -> Dict[str, Any]:
+    """
+    Responses API 코드 인터프리터를 사용하여 코드를 실행합니다.
+    데이터 분석, 시각화, 수학 계산 등에 활용할 수 있습니다.
+    
+    Args:
+        code: 실행할 코드
+        language: 프로그래밍 언어 (python)
+        files: 업로드할 파일 경로 목록
+    
+    Returns:
+        코드 실행 결과를 포함하는 딕셔너리
+    """
+    return {
+        "code": code[:100] + "..." if len(code) > 100 else code,
+        "language": language,
+        "files": files or [],
+        "output": "",
+        "message": "Azure Code Interpreter 도구가 실행되었습니다."
+    }
+
+
+def azure_image_generation_tool(
+    prompt: str,
+    model: str = "gpt-image-1.5",
+    size: str = "1024x1024",
+    quality: str = "high"
+) -> Dict[str, Any]:
+    """
+    Azure OpenAI를 사용하여 이미지를 생성합니다. GPT-Image 모델을 활용합니다.
+    
+    Args:
+        prompt: 이미지 생성 프롬프트
+        model: 사용할 모델 (gpt-image-1, gpt-image-1-mini, gpt-image-1.5)
+        size: 이미지 크기
+        quality: 이미지 품질 (low, medium, high)
+    
+    Returns:
+        생성된 이미지 정보를 포함하는 딕셔너리
+    """
+    return {
+        "prompt": prompt,
+        "model": model,
+        "size": size,
+        "quality": quality,
+        "image_url": "",
+        "message": "Azure 이미지 생성 도구가 실행되었습니다."
+    }
 
 
 # ============================================================================
@@ -415,6 +614,12 @@ TOOL_DEFINITIONS = [
     (azure_form_recognizer_tool, "ai", ["azure", "form", "document", "ocr", "extraction", "문서", "추출"]),
     (azure_speech_to_text_tool, "ai", ["azure", "speech", "audio", "transcription", "음성", "STT"]),
     (azure_function_invoke_tool, "compute", ["azure", "function", "serverless", "invoke", "함수", "호출"]),
+    # 2026 신규: Azure AI Foundry / Responses API 네이티브 도구
+    (azure_ai_foundry_agent_tool, "ai", ["azure", "foundry", "agent", "멀티스텝", "에이전트", "자동화"]),
+    (azure_deep_research_tool, "ai", ["azure", "research", "deep", "조사", "리서치", "분석", "o3"]),
+    (azure_web_search_tool, "search", ["azure", "web", "search", "실시간", "웹검색", "인터넷", "grounding"]),
+    (azure_code_interpreter_tool, "compute", ["azure", "code", "interpreter", "python", "코드실행", "데이터분석"]),
+    (azure_image_generation_tool, "ai", ["azure", "image", "generation", "gpt-image", "이미지생성", "DALL-E"]),
     # 외부 서비스
     (bing_web_search_tool, "search", ["bing", "web", "search", "internet", "웹검색", "인터넷"]),
     (github_search_tool, "search", ["github", "code", "repository", "코드", "저장소", "개발"]),
@@ -535,15 +740,19 @@ def get_tool_info(tool_name: str) -> Dict[str, Any]:
     }
 
 
-async def initialize_mcp_tools() -> None:
+def initialize_mcp_tools() -> None:
     """
     모든 MCP 도구를 초기화하고 레지스트리에 등록합니다.
-    TOOL_DEFINITIONS 리스트를 순회하며 일괄 등록합니다.
+    register_batch()를 사용하여 BM25 인덱스를 1회만 재구축합니다.
     """
     logger.info("=== MCP 도구 초기화 시작 ===")
     
+    # 일괄 등록용 튜플 리스트 생성: (tool, name, description, category, tags)
+    batch = []
     for tool_func, category, tags in TOOL_DEFINITIONS:
-        register_tool(tool_func, category=category, tags=tags)
+        batch.append((tool_func, None, None, category, tags))
+    
+    registry.register_batch(batch)
     
     logger.info(f"=== MCP 도구 초기화 완료: {registry.count()}개 도구 등록됨 ===")
 

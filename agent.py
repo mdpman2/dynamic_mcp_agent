@@ -1,27 +1,43 @@
 # -*- coding: utf-8 -*-
 """
-Dynamic MCP Agent with Azure OpenAI
+Dynamic MCP Agent with Azure OpenAI (v1 Responses API)
 
-이 모듈은 Azure OpenAI를 사용하여 동적 도구 검색 및 로딩 기능을 갖춘
-에이전트를 구현합니다. LLM에게 "검색 능력"을 부여하여 수많은 MCP 서버 중
+이 모듈은 Azure OpenAI v1 Responses API를 사용하여 동적 도구 검색 및 로딩 기능을
+갖춘 에이전트를 구현합니다. LLM에게 "검색 능력"을 부여하여 수많은 MCP 서버 중
 현재 태스크에 적합한 도구만 동적으로 로딩합니다.
+
+v2.0.0 업데이트 (2026-02-07):
+- [BREAKING] AzureOpenAI 클라이언트 → OpenAI + base_url 방식으로 전환
+- [BREAKING] chat.completions.create() → responses.create() API 전환
+- [BREAKING] conversation_history 리스트 제거 → previous_response_id 자동 체이닝
+- [NEW] 네이티브 원격 MCP 서버 도구 통합 (type: "mcp")
+- [NEW] chat_stream() 스트리밍 응답 메서드 추가
+- [NEW] add_remote_mcp_server() 런타임 MCP 서버 추가 메서드
+- [CHANGED] 기본 모델 gpt-4o → gpt-5
+- [CHANGED] 기본 API 버전 2024-08-01-preview → preview
+- [CHANGED] Function calling 응답 형식: function_call_output 타입 사용
+- [CHANGED] 도구 스키마 평탄화 (name이 최상위로 이동)
 
 핵심 아키텍처:
 1. Tool Search Tool: 사용 가능한 도구를 BM25로 검색
 2. Tool Load Tool: 선택된 도구를 동적으로 컨텍스트에 주입
 3. Dynamic Callback: 도구 로드 후 자동으로 에이전트에 도구 추가
+4. Remote MCP Server: 네이티브 MCP 서버 도구 연동
 
-참고: https://medium.com/google-cloud/implementing-anthropic-style-dynamic-tool-search-tool-f39d02a35139
+참고:
+- https://learn.microsoft.com/en-us/azure/ai-foundry/openai/how-to/responses
+- https://learn.microsoft.com/en-us/azure/ai-foundry/openai/api-version-lifecycle
 """
 
 import os
 import json
+import inspect
 import logging
 import asyncio
 from typing import Dict, Any, List, Optional, Callable
 from dotenv import load_dotenv
 
-from openai import AzureOpenAI
+from openai import OpenAI
 
 from .lib.registry import registry
 from .lib.tools import (
@@ -43,22 +59,43 @@ load_dotenv()
 class DynamicMCPAgent:
     """
     동적 도구 검색 및 로딩 기능을 갖춘 Azure OpenAI 에이전트
+    (v1 Responses API 기반)
     
     이 에이전트는 수백 개의 MCP 도구 중에서 필요한 도구만 동적으로 
     로딩하여 토큰 비용을 절감하고 추론 정확도를 향상시킵니다.
     
+    2026 최신 기능:
+    - Responses API: 상태 기반 API로 대화 체이닝 자동 관리
+    - v1 API: 최신 기능에 자동 접근, 버전 관리 불필요
+    - 네이티브 MCP 서버 도구: 원격 MCP 서버 직접 연동
+    - GPT-5 시리즈 지원
+    - 스트리밍 응답 지원
+    
     주요 기능:
     - BM25 기반 도구 검색
     - 동적 도구 로딩 및 컨텍스트 주입
-    - Azure OpenAI Function Calling 통합
+    - Azure OpenAI Responses API Function Calling
+    - 원격 MCP 서버 네이티브 통합
     
     Attributes:
-        client: Azure OpenAI 클라이언트
+        client: OpenAI 클라이언트 (v1 API)
         model: 사용할 모델 배포 이름
         active_tools: 현재 활성화된 도구 목록
-        conversation_history: 대화 기록
+        last_response_id: 마지막 응답 ID (대화 체이닝용)
+        remote_mcp_servers: 연결된 원격 MCP 서버 목록
     """
     
+    # Python 타입 → JSON Schema 타입 매핑 (상수)
+    _PYTHON_TYPE_MAP = {
+        int: "integer",
+        bool: "boolean",
+        float: "number",
+        list: "array",
+        List: "array",
+        dict: "object",
+        Dict: "object",
+    }
+
     # 시스템 프롬프트
     SYSTEM_PROMPT = """당신은 Azure 기반의 다양한 도구에 접근할 수 있는 고급 AI 어시스턴트입니다.
 
@@ -68,10 +105,12 @@ class DynamicMCPAgent:
 1. 사용자 요청에 직접적으로 대응하는 도구가 없으면, 먼저 'search_available_tools' 함수를 사용하여 관련 도구를 검색하세요.
 2. 검색 결과에서 적절한 도구를 찾으면, 'load_tool' 함수를 사용하여 해당 도구를 로드하세요.
 3. 도구가 로드되면, 다음 턴에서 해당 도구를 사용하여 사용자의 요청을 처리할 수 있습니다.
+4. 원격 MCP 서버의 도구가 필요하면, 직접 해당 MCP 서버 도구를 활용할 수 있습니다.
 
 도구 검색 및 로드 과정을 사용자에게 알려주세요. 예를 들어:
 - "번역 도구를 검색하고 있습니다..."
 - "azure_translator 도구를 로드합니다..."
+- "Microsoft Learn MCP 서버에서 정보를 검색합니다..."
 
 사용자의 요청을 정확하게 이해하고, 가장 적합한 도구를 선택하여 작업을 수행하세요.
 한국어로 응답해 주세요."""
@@ -81,7 +120,9 @@ class DynamicMCPAgent:
         azure_endpoint: Optional[str] = None,
         api_key: Optional[str] = None,
         api_version: Optional[str] = None,
-        deployment_name: Optional[str] = None
+        deployment_name: Optional[str] = None,
+        remote_mcp_servers: Optional[List[Dict[str, Any]]] = None,
+        enable_streaming: bool = False
     ):
         """
         에이전트를 초기화합니다.
@@ -89,24 +130,34 @@ class DynamicMCPAgent:
         Args:
             azure_endpoint: Azure OpenAI 엔드포인트 URL
             api_key: API 키
-            api_version: API 버전
+            api_version: v1 API 버전 ("preview" 또는 "latest")
             deployment_name: 모델 배포 이름
+            remote_mcp_servers: 원격 MCP 서버 설정 목록
+            enable_streaming: 스트리밍 응답 활성화 여부
         """
         self.azure_endpoint = azure_endpoint or os.getenv("AZURE_OPENAI_ENDPOINT")
         self.api_key = api_key or os.getenv("AZURE_OPENAI_API_KEY")
-        self.api_version = api_version or os.getenv("AZURE_OPENAI_API_VERSION", "2024-08-01-preview")
-        self.model = deployment_name or os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-4.1")
+        self.api_version = api_version or os.getenv("AZURE_OPENAI_API_VERSION", "preview")
+        self.model = deployment_name or os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-5")
+        self.enable_streaming = enable_streaming
         
-        # Azure OpenAI 클라이언트 초기화
-        self.client = AzureOpenAI(
-            azure_endpoint=self.azure_endpoint,
+        # v1 API: OpenAI 클라이언트 + base_url 방식
+        base_url = f"{self.azure_endpoint.rstrip('/')}/openai/v1/"
+        self.client = OpenAI(
             api_key=self.api_key,
-            api_version=self.api_version
+            base_url=base_url,
+            default_query={"api-version": self.api_version}
         )
         
-        # 활성 도구 및 대화 기록 초기화
+        # 활성 도구 초기화
         self.active_tools: Dict[str, Callable] = {}
-        self.conversation_history: List[Dict[str, Any]] = []
+        
+        # Responses API: previous_response_id로 대화 자동 체이닝
+        self.last_response_id: Optional[str] = None
+        self._conversation_turns: int = 0
+        
+        # 원격 MCP 서버 설정
+        self.remote_mcp_servers: List[Dict[str, Any]] = remote_mcp_servers or []
         
         # 기본 도구 함수 매핑
         self._base_tool_functions = {
@@ -114,54 +165,82 @@ class DynamicMCPAgent:
             "load_tool": load_tool
         }
         
-        logger.info(f"DynamicMCPAgent 초기화 완료 - 모델: {self.model}")
+        # 기본 도구 스키마 캐시 (변경되지 않으므로 한 번만 생성)
+        self._base_tools_schema_cache: Optional[List[Dict[str, Any]]] = None
+        
+        logger.info(f"DynamicMCPAgent 초기화 완료 - 모델: {self.model}, API: v1/{self.api_version}")
+        if self.remote_mcp_servers:
+            logger.info(f"  원격 MCP 서버: {len(self.remote_mcp_servers)}개 연결됨")
     
+    @staticmethod
+    def _serialize_result(result: Any) -> str:
+        """도구 실행 결과를 JSON 문자열로 직렬화합니다."""
+        if isinstance(result, (dict, list)):
+            return json.dumps(result, ensure_ascii=False)
+        return str(result)
+
     def _get_base_tools_schema(self) -> List[Dict[str, Any]]:
-        """기본 도구(검색, 로드)의 OpenAI 함수 스키마를 반환합니다."""
-        return [
+        """기본 도구(검색, 로드)의 Responses API 함수 스키마를 반환합니다. (캐시됨)"""
+        if self._base_tools_schema_cache is not None:
+            # MCP 서버 수가 바뀌지 않았으면 캐시 반환
+            expected_len = 2 + len(self.remote_mcp_servers)
+            if len(self._base_tools_schema_cache) == expected_len:
+                return self._base_tools_schema_cache
+
+        tools = [
             {
                 "type": "function",
-                "function": {
-                    "name": "search_available_tools",
-                    "description": "사용 가능한 도구 라이브러리에서 적합한 도구를 검색합니다. 특정 작업에 필요한 도구가 없을 때 이 함수를 사용하세요.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "query": {
-                                "type": "string",
-                                "description": "검색 키워드 (예: 'search', 'database', 'translate', 'image', '번역', '검색')"
-                            },
-                            "top_k": {
-                                "type": "integer",
-                                "description": "반환할 최대 결과 수 (기본값: 5)",
-                                "default": 5
-                            }
+                "name": "search_available_tools",
+                "description": "사용 가능한 도구 라이브러리에서 적합한 도구를 검색합니다. 특정 작업에 필요한 도구가 없을 때 이 함수를 사용하세요.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "검색 키워드 (예: 'search', 'database', 'translate', 'image', '번역', '검색')"
                         },
-                        "required": ["query"]
-                    }
+                        "top_k": {
+                            "type": "integer",
+                            "description": "반환할 최대 결과 수 (기본값: 5)",
+                            "default": 5
+                        }
+                    },
+                    "required": ["query"]
                 }
             },
             {
                 "type": "function",
-                "function": {
-                    "name": "load_tool",
-                    "description": "특정 도구를 현재 컨텍스트에 로드합니다. 'search_available_tools'로 도구를 찾은 후 이 함수를 호출하세요.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "tool_name": {
-                                "type": "string",
-                                "description": "로드할 도구의 정확한 이름"
-                            }
-                        },
-                        "required": ["tool_name"]
-                    }
+                "name": "load_tool",
+                "description": "특정 도구를 현재 컨텍스트에 로드합니다. 'search_available_tools'로 도구를 찾은 후 이 함수를 호출하세요.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "tool_name": {
+                            "type": "string",
+                            "description": "로드할 도구의 정확한 이름"
+                        }
+                    },
+                    "required": ["tool_name"]
                 }
             }
         ]
+        
+        # 원격 MCP 서버 도구 추가 (Responses API 네이티브 지원)
+        for mcp_server in self.remote_mcp_servers:
+            tools.append({
+                "type": "mcp",
+                "server_label": mcp_server.get("server_label", "mcp_server"),
+                "server_url": mcp_server["server_url"],
+                "server_description": mcp_server.get("server_description", ""),
+                "require_approval": mcp_server.get("require_approval", "never"),
+                "allowed_tools": mcp_server.get("allowed_tools"),  # None이면 모든 도구 허용
+            })
+        
+        self._base_tools_schema_cache = tools
+        return tools
     
     def _get_active_tools_schema(self) -> List[Dict[str, Any]]:
-        """현재 활성화된 도구들의 OpenAI 함수 스키마를 반환합니다."""
+        """현재 활성화된 도구들의 Responses API 함수 스키마를 반환합니다."""
         tools_schema = self._get_base_tools_schema()
         
         for tool_name, tool_func in self.active_tools.items():
@@ -169,43 +248,35 @@ class DynamicMCPAgent:
             description = tool_func.__doc__ or f"{tool_name} 도구"
             description = description.strip().split('\n')[0]  # 첫 줄만 사용
             
-            # 간단한 스키마 생성 (실제 구현에서는 더 정교한 스키마 추출 필요)
+            # Responses API 형식: "name"이 최상위에 위치
             tool_schema = {
                 "type": "function",
-                "function": {
-                    "name": tool_name,
-                    "description": description,
-                    "parameters": {
-                        "type": "object",
-                        "properties": {},
-                        "required": []
-                    }
+                "name": tool_name,
+                "description": description,
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "required": []
                 }
             }
             
-            # 함수 시그니처에서 파라미터 추출 시도
-            import inspect
+            # 함수 시그니처에서 파라미터 추출
             sig = inspect.signature(tool_func)
             for param_name, param in sig.parameters.items():
                 if param_name == 'self':
                     continue
-                    
-                param_type = "string"  # 기본 타입
-                if param.annotation != inspect.Parameter.empty:
-                    if param.annotation == int:
-                        param_type = "integer"
-                    elif param.annotation == bool:
-                        param_type = "boolean"
-                    elif param.annotation == float:
-                        param_type = "number"
                 
-                tool_schema["function"]["parameters"]["properties"][param_name] = {
+                param_type = self._PYTHON_TYPE_MAP.get(
+                    param.annotation, "string"
+                ) if param.annotation != inspect.Parameter.empty else "string"
+                
+                tool_schema["parameters"]["properties"][param_name] = {
                     "type": param_type,
                     "description": f"{param_name} 파라미터"
                 }
                 
                 if param.default == inspect.Parameter.empty:
-                    tool_schema["function"]["parameters"]["required"].append(param_name)
+                    tool_schema["parameters"]["required"].append(param_name)
             
             tools_schema.append(tool_schema)
         
@@ -255,14 +326,14 @@ class DynamicMCPAgent:
                 requested_tool = arguments.get("tool_name")
                 self._dynamic_tool_injection(requested_tool)
             
-            return json.dumps(result, ensure_ascii=False) if isinstance(result, (dict, list)) else str(result)
+            return self._serialize_result(result)
         
         # 활성화된 도구 확인
         if tool_name in self.active_tools:
             func = self.active_tools[tool_name]
             try:
                 result = func(**arguments)
-                return json.dumps(result, ensure_ascii=False) if isinstance(result, (dict, list)) else str(result)
+                return self._serialize_result(result)
             except Exception as e:
                 logger.error(f"도구 '{tool_name}' 실행 중 오류: {e}")
                 return json.dumps({"error": str(e)}, ensure_ascii=False)
@@ -271,9 +342,30 @@ class DynamicMCPAgent:
             "error": f"도구 '{tool_name}'를 찾을 수 없습니다. 먼저 load_tool로 도구를 로드하세요."
         }, ensure_ascii=False)
     
+    def add_remote_mcp_server(
+        self,
+        server_url: str,
+        server_label: str,
+        server_description: str = "",
+        require_approval: str = "never",
+        allowed_tools: Optional[List[str]] = None
+    ) -> None:
+        """원격 MCP 서버를 추가합니다."""
+        self.remote_mcp_servers.append({
+            "server_url": server_url,
+            "server_label": server_label,
+            "server_description": server_description,
+            "require_approval": require_approval,
+            "allowed_tools": allowed_tools,
+        })
+        logger.info(f"원격 MCP 서버 추가됨: {server_label} ({server_url})")
+    
     async def chat(self, user_message: str) -> str:
         """
-        사용자 메시지에 대해 응답합니다.
+        Responses API를 사용하여 사용자 메시지에 응답합니다.
+        
+        previous_response_id를 활용하여 대화 컨텍스트를 자동으로 유지합니다.
+        이전 대화의 모든 컨텍스트가 서버 측에서 관리됩니다.
         
         Args:
             user_message: 사용자 입력 메시지
@@ -281,20 +373,15 @@ class DynamicMCPAgent:
         Returns:
             에이전트 응답
         """
-        # 대화 기록에 사용자 메시지 추가
-        self.conversation_history.append({
-            "role": "user",
-            "content": user_message
-        })
-        
-        messages = [
-            {"role": "system", "content": self.SYSTEM_PROMPT},
-            *self.conversation_history
-        ]
+        self._conversation_turns += 1
         
         # 최대 반복 횟수 (도구 호출 루프 방지)
         max_iterations = 10
         iteration = 0
+        current_response_id = self.last_response_id
+        
+        # 첫 번째 요청 입력
+        current_input = [{"role": "user", "content": user_message}]
         
         while iteration < max_iterations:
             iteration += 1
@@ -302,75 +389,126 @@ class DynamicMCPAgent:
             # 현재 활성 도구 스키마 가져오기
             tools = self._get_active_tools_schema()
             
-            # Azure OpenAI API 호출
+            # Responses API 호출
             try:
-                response = self.client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    tools=tools,
-                    tool_choice="auto",
-                    temperature=0.7
-                )
+                create_params = {
+                    "model": self.model,
+                    "input": current_input,
+                    "tools": tools,
+                    "tool_choice": "auto",
+                    "instructions": self.SYSTEM_PROMPT,
+                    "temperature": 0.7,
+                }
+                
+                # 이전 대화가 있으면 체이닝
+                if current_response_id:
+                    create_params["previous_response_id"] = current_response_id
+                
+                response = self.client.responses.create(**create_params)
+                
             except Exception as e:
-                logger.error(f"API 호출 오류: {e}")
+                logger.error(f"Responses API 호출 오류: {e}")
                 return f"죄송합니다. API 호출 중 오류가 발생했습니다: {str(e)}"
             
-            response_message = response.choices[0].message
+            # 응답 ID 저장 (다음 대화 체이닝용)
+            self.last_response_id = response.id
+            
+            # 도구 호출 확인
+            has_function_calls = False
+            function_call_outputs = []
+            
+            for output_item in response.output:
+                if output_item.type == "function_call":
+                    has_function_calls = True
+                    tool_name = output_item.name
+                    call_id = output_item.call_id
+                    
+                    try:
+                        arguments = json.loads(output_item.arguments)
+                    except (json.JSONDecodeError, AttributeError):
+                        arguments = {}
+                    
+                    logger.info(f"도구 호출: {tool_name}({arguments})")
+                    
+                    # 도구 실행
+                    tool_result = self._execute_tool(tool_name, arguments)
+                    
+                    function_call_outputs.append({
+                        "type": "function_call_output",
+                        "call_id": call_id,
+                        "output": tool_result
+                    })
             
             # 도구 호출이 없으면 최종 응답 반환
-            if not response_message.tool_calls:
-                assistant_message = response_message.content or ""
-                self.conversation_history.append({
-                    "role": "assistant",
-                    "content": assistant_message
-                })
-                return assistant_message
+            if not has_function_calls:
+                return response.output_text or ""
             
-            # 도구 호출 처리
-            messages.append({
-                "role": "assistant",
-                "content": response_message.content,
-                "tool_calls": [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {
-                            "name": tc.function.name,
-                            "arguments": tc.function.arguments
-                        }
-                    }
-                    for tc in response_message.tool_calls
-                ]
-            })
-            
-            for tool_call in response_message.tool_calls:
-                tool_name = tool_call.function.name
-                try:
-                    arguments = json.loads(tool_call.function.arguments)
-                except json.JSONDecodeError:
-                    arguments = {}
-                
-                logger.info(f"도구 호출: {tool_name}({arguments})")
-                
-                # 도구 실행
-                tool_result = self._execute_tool(tool_name, arguments)
-                
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call.id,
-                    "content": tool_result
-                })
+            # 도구 결과를 다음 요청 입력으로 설정
+            current_input = function_call_outputs
+            current_response_id = response.id
         
         return "죄송합니다. 요청을 처리하는 데 너무 많은 단계가 필요합니다. 다시 시도해 주세요."
     
+    async def chat_stream(self, user_message: str):
+        """
+        스트리밍 방식으로 응답합니다. (Responses API 스트리밍)
+        
+        Args:
+            user_message: 사용자 입력 메시지
+            
+        Yields:
+            응답 텍스트 델타
+        """
+        self._conversation_turns += 1
+        
+        tools = self._get_active_tools_schema()
+        
+        create_params = {
+            "model": self.model,
+            "input": [{"role": "user", "content": user_message}],
+            "tools": tools,
+            "tool_choice": "auto",
+            "instructions": self.SYSTEM_PROMPT,
+            "temperature": 0.7,
+            "stream": True,
+        }
+        
+        if self.last_response_id:
+            create_params["previous_response_id"] = self.last_response_id
+        
+        try:
+            stream = self.client.responses.create(**create_params)
+            
+            for event in stream:
+                if event.type == 'response.output_text.delta':
+                    yield event.delta
+                elif event.type == 'response.completed':
+                    self.last_response_id = event.response.id
+                    
+        except Exception as e:
+            logger.error(f"스트리밍 오류: {e}")
+            yield f"\n⚠️ 스트리밍 중 오류 발생: {str(e)}"
+    
     def chat_sync(self, user_message: str) -> str:
         """동기 방식의 채팅 메서드"""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        
+        if loop and loop.is_running():
+            # 이미 이벤트 루프 실행 중이면 별도 스레드에서 실행
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(asyncio.run, self.chat(user_message))
+                return future.result(timeout=120)
         return asyncio.run(self.chat(user_message))
     
     def reset_conversation(self) -> None:
-        """대화 기록을 초기화합니다."""
-        self.conversation_history.clear()
-        logger.info("대화 기록이 초기화되었습니다.")
+        """대화 기록을 초기화합니다. (previous_response_id 리셋)"""
+        self.last_response_id = None
+        self._conversation_turns = 0
+        logger.info("대화 기록이 초기화되었습니다. (response_id 리셋)")
     
     def reset_tools(self) -> None:
         """활성화된 도구를 초기화합니다."""
@@ -379,24 +517,63 @@ class DynamicMCPAgent:
     
     def get_active_tools_list(self) -> List[str]:
         """현재 활성화된 도구 목록을 반환합니다."""
-        return list(self.active_tools.keys())
+        tool_names = list(self.active_tools.keys())
+        # 원격 MCP 서버 도구도 표시
+        for mcp in self.remote_mcp_servers:
+            tool_names.append(f"[MCP] {mcp.get('server_label', 'unknown')}")
+        return tool_names
     
     def get_stats(self) -> Dict[str, Any]:
         """에이전트 통계를 반환합니다."""
         return {
             "model": self.model,
+            "api": f"v1/{self.api_version}",
             "total_tools_in_registry": registry.count(),
             "active_tools": len(self.active_tools),
             "active_tool_names": self.get_active_tools_list(),
-            "conversation_turns": len(self.conversation_history)
+            "remote_mcp_servers": len(self.remote_mcp_servers),
+            "conversation_turns": self._conversation_turns,
+            "last_response_id": self.last_response_id,
         }
 
 
-# 모듈 레벨 에이전트 인스턴스 (선택적 사용)
-def create_agent(**kwargs) -> DynamicMCPAgent:
-    """에이전트 인스턴스를 생성하고 도구를 초기화합니다."""
-    # 도구 초기화
-    asyncio.run(initialize_mcp_tools())
+# 기본 원격 MCP 서버 설정
+DEFAULT_REMOTE_MCP_SERVERS = [
+    {
+        "server_label": "microsoft_learn",
+        "server_url": "https://learn.microsoft.com/api/mcp",
+        "server_description": "Microsoft Learn MCP 서버 - Microsoft 공식 문서 검색 및 조회",
+        "require_approval": "never",
+    },
+]
+
+
+def create_agent(
+    enable_remote_mcp: bool = True,
+    remote_mcp_servers: Optional[List[Dict[str, Any]]] = None,
+    **kwargs
+) -> DynamicMCPAgent:
+    """에이전트 인스턴스를 생성하고 도구를 초기화합니다.
+    
+    Args:
+        enable_remote_mcp: 기본 원격 MCP 서버 활성화 여부
+        remote_mcp_servers: 추가 원격 MCP 서버 설정
+        **kwargs: DynamicMCPAgent 생성자 인자
+    
+    Returns:
+        초기화된 DynamicMCPAgent 인스턴스
+    """
+    # 도구 초기화 (동기 함수로 변경됨)
+    initialize_mcp_tools()
+    
+    # 원격 MCP 서버 설정 병합
+    mcp_servers = []
+    if enable_remote_mcp:
+        mcp_servers.extend(DEFAULT_REMOTE_MCP_SERVERS)
+    if remote_mcp_servers:
+        mcp_servers.extend(remote_mcp_servers)
+    
+    kwargs.setdefault("remote_mcp_servers", mcp_servers)
     
     # 에이전트 생성
     return DynamicMCPAgent(**kwargs)
