@@ -134,7 +134,6 @@ dynamic_mcp_agent/
 ├── agent.py                 # 메인 에이전트 (v1 Responses API + 네이티브 MCP)
 ├── main.py                  # CLI / Web / Demo / Stream 실행
 ├── requirements.txt         # Python 의존성 (openai>=1.86.0)
-├── .env.example             # 환경 변수 템플릿 (v1 API 설정)
 ├── test_bm25.py             # 검색 테스트 스크립트
 ├── __init__.py              # 패키지 초기화 (v2.0.0)
 └── lib/
@@ -166,17 +165,68 @@ pip install -r requirements.txt
 
 #### 2. 환경 설정
 
-```bash
-# .env 파일 생성
-cp .env.example .env
-```
+프로젝트 루트에 `.env` 파일을 생성하고 아래 내용을 참고하여 설정하세요:
 
-`.env` 파일 편집:
 ```env
-AZURE_OPENAI_API_KEY=your-api-key
-AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/
-AZURE_OPENAI_API_VERSION=preview          # v1 API: "preview" 또는 "latest"
-AZURE_OPENAI_DEPLOYMENT_NAME=gpt-5        # GPT-5 시리즈 권장
+# =============================================================
+# Dynamic MCP Agent - Azure OpenAI v1 Responses API Configuration
+# =============================================================
+# 2026 최신: v1 API 사용 (버전 관리 불필요, preview/latest만 지정)
+# 참고: https://learn.microsoft.com/en-us/azure/ai-foundry/openai/api-version-lifecycle
+
+# Azure OpenAI Configuration (Required)
+AZURE_OPENAI_ENDPOINT=https://your-resource-name.openai.azure.com/
+AZURE_OPENAI_API_KEY=your-api-key-here
+
+# v1 API 버전: "preview" (최신 프리뷰 기능) 또는 "latest" (GA 안정 버전)
+AZURE_OPENAI_API_VERSION=preview
+
+# 모델 배포명 (GPT-5 시리즈 권장)
+# 사용 가능: gpt-5, gpt-5-mini, gpt-5-nano, gpt-5-pro, gpt-5.1, gpt-5.2
+AZURE_OPENAI_DEPLOYMENT_NAME=gpt-5
+
+# Azure OpenAI Embedding Model (for hybrid search)
+AZURE_OPENAI_EMBEDDING_MODEL=text-embedding-3-large
+
+# Hybrid Search Thresholds (Optional - tune these for your use case)
+# BM25_CONFIDENCE_THRESHOLD=5.0
+# EMBEDDING_SIMILARITY_THRESHOLD=0.75
+
+# Azure AI Search (Optional - for azure_ai_search_tool)
+AZURE_SEARCH_ENDPOINT=https://your-search-service.search.windows.net
+AZURE_SEARCH_KEY=your-search-key-here
+AZURE_SEARCH_INDEX_NAME=your-index-name
+
+# Azure Blob Storage (Optional - for azure_blob_storage_tool)
+AZURE_STORAGE_CONNECTION_STRING=your-storage-connection-string
+
+# Azure SQL Database (Optional - for azure_sql_query_tool)
+AZURE_SQL_CONNECTION_STRING=your-sql-connection-string
+
+# Azure Cosmos DB (Optional - for azure_cosmos_db_tool)
+AZURE_COSMOS_ENDPOINT=https://your-cosmos-account.documents.azure.com:443/
+AZURE_COSMOS_KEY=your-cosmos-key-here
+
+# Azure Cognitive Services (Optional - for vision, translator, etc.)
+AZURE_COGNITIVE_ENDPOINT=https://your-cognitive-service.cognitiveservices.azure.com/
+AZURE_COGNITIVE_KEY=your-cognitive-key-here
+
+# Azure Speech Services (Optional - for speech_to_text_tool)
+AZURE_SPEECH_KEY=your-speech-key-here
+AZURE_SPEECH_REGION=koreacentral
+
+# Bing Search (Optional - for bing_web_search_tool)
+BING_SEARCH_API_KEY=your-bing-api-key-here
+
+# =============================================================
+# Remote MCP Server Configuration (Optional)
+# =============================================================
+# 기본으로 Microsoft Learn MCP 서버가 연결됩니다.
+# 추가 서버는 코드에서 agent.add_remote_mcp_server()로 등록하거나
+# CLI에서 'mcp-add <url> <label>' 명령으로 추가할 수 있습니다.
+
+# Logging Level
+LOG_LEVEL=INFO
 ```
 
 > ⚠️ **v1.0 → v2.0 마이그레이션**: `API_VERSION`을 날짜 형식(예: `2024-08-01-preview`)에서 `preview` 또는 `latest`로 변경하세요.
@@ -448,11 +498,12 @@ git clone https://github.com/your-username/dynamic-mcp-agent.git
 cd dynamic-mcp-agent
 pip install -r requirements.txt
 
-# Configure environment
-cp .env.example .env
-# Edit .env with your Azure OpenAI credentials
-# Set AZURE_OPENAI_API_VERSION=preview (v1 API)
-# Set AZURE_OPENAI_DEPLOYMENT_NAME=gpt-5 (GPT-5 series)
+# Configure environment — create .env file (see Korean section above for full template)
+# Set required variables:
+#   AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/
+#   AZURE_OPENAI_API_KEY=your-api-key
+#   AZURE_OPENAI_API_VERSION=preview          (v1 API)
+#   AZURE_OPENAI_DEPLOYMENT_NAME=gpt-5        (GPT-5 series)
 
 # Run
 python main.py             # CLI mode
