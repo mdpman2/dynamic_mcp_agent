@@ -1,8 +1,21 @@
 # -*- coding: utf-8 -*-
 """
-Dynamic MCP Agent Package (v1 Responses API)
+Dynamic MCP Agent Package (v1 Responses API + Agents SDK)
 
 Changelog:
+  v3.0.0 (2026-02-26)
+    - [NEW] OpenAI Agents SDK 통합 - 멀티 에이전트 오케스트레이션 (--agents 모드)
+    - [NEW] Structured Outputs 지원 (Pydantic v2 스키마 기반 응답)
+    - [NEW] o4-mini 추론 모델 지원 (--reasoning 모드)
+    - [NEW] Reciprocal Rank Fusion (RRF) 하이브리드 검색 알고리즘
+    - [NEW] 5개 신규 도구 추가 (Azure AI Agent Service, Computer Use, MCP Discovery, Structured Output, Realtime Audio)
+    - [NEW] httpx 기반 비동기 HTTP (aiohttp 대체, Streamable HTTP 지원)
+    - [NEW] 에이전트 트레이싱/관찰성 지원
+    - [CHANGED] 기본 모델 gpt-5 → gpt-5.2
+    - [CHANGED] openai SDK 최소 버전 1.86 → 1.93
+    - [CHANGED] sentence-transformers 3.4+ / torch 2.5+ 업데이트
+    - [CHANGED] 도구 총 25개로 확장 (20 → 25)
+    - [CHANGED] Gradio 5.12+ 지원
   v2.0.0 (2026-02-07)
     - Azure OpenAI v1 API (Next Generation) 전환
     - Responses API 도입 (chat.completions → responses.create)
@@ -30,7 +43,7 @@ from .lib import (
     register_tool
 )
 
-__version__ = "2.0.0"
+__version__ = "3.0.0"
 __all__ = [
     "DynamicMCPAgent",
     "create_agent",
