@@ -8,7 +8,7 @@
 
 > **Azure OpenAI v1 Responses API + Agents SDK 기반 다층 하이브리드 도구 검색 에이전트**
 > BM25 → Sentence-Transformers → RRF Fusion → MCP Registry → GPT-5.2 LLM 5단계 검색
-> 네이티브 원격 MCP 서버 · Structured Outputs · o4-mini 추론 · 멀티 에이전트 오케스트레이션
+> 네이티브 원격 MCP 서버 · Structured Outputs · GPT-5.2 네이티브 추론 · 멀티 에이전트 오케스트레이션
 
 [English](#english) | [한국어](#한국어)
 
@@ -21,7 +21,7 @@
 | 항목 | v2.0.0 | v3.0.0 |
 |------|--------|--------|
 | 기본 모델 | gpt-5 | **gpt-5.2** |
-| 추론 모델 | _(없음)_ | **o4-mini** (`--reasoning`) |
+| 추론 모델 | _(없음)_ | **GPT-5.2 네이티브 추론** (`--reasoning`) |
 | 멀티 에이전트 | _(없음)_ | **OpenAI Agents SDK** (`--agents`) |
 | 구조화 출력 | _(없음)_ | **Structured Outputs** (Pydantic v2) |
 | 검색 알고리즘 | 4단계 순차 | **5단계 + RRF Fusion** |
@@ -32,7 +32,7 @@
 
 ### v3.0 신규 기능
 - 🤝 **멀티 에이전트 오케스트레이션** — OpenAI Agents SDK로 전문 에이전트 핸드오프
-- 🧠 **o4-mini 추론 모드** — 복잡한 수학·논리·코드 분석에 특화
+- 🧠 **GPT-5.2 네이티브 추론 모드** — 복잡한 수학·논리·코드 분석에 특화 (별도 추론 모델 불필요)
 - 📊 **Structured Outputs** — Pydantic v2 스키마 기반 JSON 응답 보장
 - 🔀 **RRF (Reciprocal Rank Fusion)** — BM25 + Sentence-Transformers 결과 통합
 - 🔭 **에이전트 트레이싱** — 멀티 에이전트 실행 추적 및 관찰성
@@ -57,7 +57,7 @@ MCP(Model Context Protocol) 생태계가 확장되면서 사용 가능한 도구
 
 이 프로젝트는 **"도구를 찾기 위한 도구(Tool Search Tool)"** 패턴을 Azure OpenAI 기반의 **다층 하이브리드 검색**으로 구현하여, 수많은 MCP 서버 중 현재 태스크에 적합한 도구만 동적으로 로딩합니다.
 
-v3.0.0에서는 **OpenAI Agents SDK 멀티 에이전트 오케스트레이션**, **Structured Outputs**, **o4-mini 추론 모델**, **RRF 하이브리드 검색 알고리즘**을 도입하여 한층 강력해졌습니다.
+v3.0.0에서는 **OpenAI Agents SDK 멀티 에이전트 오케스트레이션**, **Structured Outputs**, **GPT-5.2 네이티브 추론**, **RRF 하이브리드 검색 알고리즘**을 도입하여 한층 강력해졌습니다.
 
 ### ✨ 주요 기능
 
@@ -66,7 +66,7 @@ v3.0.0에서는 **OpenAI Agents SDK 멀티 에이전트 오케스트레이션**,
 | 🔍 **5단계 하이브리드 검색 + RRF** | BM25 → Sentence-Transformers → RRF Fusion → MCP Registry → GPT-5.2 |
 | 🌐 **네이티브 MCP 서버 도구** | Responses API `type: "mcp"` 으로 원격 MCP 서버 직접 연동 |
 | 🤝 **멀티 에이전트 오케스트레이션** | OpenAI Agents SDK 기반 전문 에이전트 핸드오프 |
-| 🧠 **추론 모델 지원** | o4-mini 기반 깊은 사고 (수학, 논리, 코드 분석) |
+| 🧠 **추론 모델 지원** | GPT-5.2 네이티브 추론 (수학, 논리, 코드 분석) |
 | 📊 **Structured Outputs** | Pydantic v2 스키마 기반 구조화된 JSON 응답 |
 | 🔄 **자동 대화 체이닝** | `previous_response_id` 서버 측 상태 관리 |
 | ⚡ **스트리밍 응답** | 실시간 토큰 출력 + 도구 호출 루프 지원 |
@@ -162,7 +162,7 @@ dynamic_mcp_agent/
 │   │   ├── chat()                   # Responses API 비동기 대화
 │   │   ├── chat_stream()            # 스트리밍 응답 (도구 호출 루프 포함)
 │   │   ├── chat_sync()             # 동기 래퍼
-│   │   ├── chat_with_reasoning()    # o4-mini 추론 모드
+│   │   ├── chat_with_reasoning()    # GPT-5.2 네이티브 추론 모드
 │   │   ├── chat_structured()        # Structured Outputs (Pydantic v2)
 │   │   ├── _resolve_json_type()     # 제네릭 타입 → JSON Schema 변환
 │   │   └── _dynamic_tool_injection()# 런타임 도구 주입
@@ -173,7 +173,7 @@ dynamic_mcp_agent/
 │   ├── run_web_mode()           # Gradio 웹 UI
 │   ├── run_demo_mode()          # 데모 시나리오
 │   ├── run_stream_cli_mode()    # 스트리밍 CLI (단일 이벤트 루프)
-│   ├── run_reasoning_cli_mode() # o4-mini 추론 CLI
+│   ├── run_reasoning_cli_mode() # GPT-5.2 네이티브 추론 CLI
 │   └── run_agents_mode()        # Agents SDK 멀티 에이전트
 ├── requirements.txt         # Python 의존성 (openai≥1.93, openai-agents≥0.3)
 ├── __init__.py              # 패키지 초기화 (v3.0.0)
@@ -241,8 +241,8 @@ AZURE_OPENAI_API_VERSION=preview
 # 사용 가능: gpt-5, gpt-5.1, gpt-5.2, gpt-5-mini, gpt-5-nano, gpt-5-pro
 AZURE_OPENAI_DEPLOYMENT_NAME=gpt-5.2
 
-# 추론 모델 (Optional - --reasoning 모드)
-AZURE_OPENAI_REASONING_MODEL=o4-mini
+# 추론 모델 (Optional - --reasoning 모드, 기본: gpt-5.2 네이티브 추론)
+AZURE_OPENAI_REASONING_MODEL=gpt-5.2
 
 # Azure AI Search (Optional - for azure_ai_search_tool)
 AZURE_SEARCH_ENDPOINT=https://your-search-service.search.windows.net
@@ -258,7 +258,7 @@ python main.py
 # 스트리밍 모드 (실시간 토큰 출력)
 python main.py --stream
 
-# 추론 모드 (o4-mini) ← v3.0 신규
+# 추론 모드 (GPT-5.2 네이티브) ← v3.0 신규
 python main.py --reasoning
 
 # 멀티 에이전트 모드 (Agents SDK) ← v3.0 신규
@@ -556,14 +556,14 @@ As the MCP (Model Context Protocol) ecosystem expands, the number of available t
 
 This project implements the **"Tool Search Tool"** pattern with **multi-layer hybrid search + RRF fusion** based on Azure OpenAI, dynamically loading only the tools suitable for the current task.
 
-v3.0 adds **OpenAI Agents SDK multi-agent orchestration**, **Structured Outputs**, **o4-mini reasoning model**, and **Reciprocal Rank Fusion (RRF)** hybrid search.
+v3.0 adds **OpenAI Agents SDK multi-agent orchestration**, **Structured Outputs**, **GPT-5.2 native reasoning**, and **Reciprocal Rank Fusion (RRF)** hybrid search.
 
 ### ✨ Key Features
 
 - 🔍 **5-Layer Hybrid Search + RRF**: BM25 → Sentence-Transformers → RRF Fusion → MCP Registry → GPT-5.2
 - 🌐 **Native Remote MCP Server Tools**: Responses API `type: "mcp"` integration
 - 🤝 **Multi-Agent Orchestration**: OpenAI Agents SDK with agent handoffs
-- 🧠 **Reasoning Model**: o4-mini for complex math, logic, code analysis
+- 🧠 **Reasoning Model**: GPT-5.2 native reasoning for complex math, logic, code analysis
 - 📊 **Structured Outputs**: Pydantic v2 schema-based JSON responses
 - 🔄 **Auto Conversation Chaining**: `previous_response_id` server-side state
 - ⚡ **Streaming Responses**: `--stream` CLI with tool call loop support
@@ -592,7 +592,7 @@ AZURE_OPENAI_DEPLOYMENT_NAME=gpt-5.2
 # Run
 python main.py                # CLI mode
 python main.py --stream       # Streaming mode
-python main.py --reasoning    # o4-mini reasoning (NEW v3.0)
+python main.py --reasoning    # GPT-5.2 native reasoning (NEW v3.0)
 python main.py --agents       # Multi-agent mode (NEW v3.0)
 python main.py --web          # Gradio web UI
 python main.py --demo         # Demo scenarios
@@ -616,7 +616,7 @@ python -m pytest dynamic_mcp_agent/tests/test_all_scenarios.py -v
 #### v3.0.0 (2026-02-26)
 - **NEW**: OpenAI Agents SDK multi-agent orchestration (`--agents` mode)
 - **NEW**: Structured Outputs with Pydantic v2 schema validation
-- **NEW**: o4-mini reasoning model support (`--reasoning` mode)
+- **NEW**: GPT-5.2 native reasoning support (`--reasoning` mode, no separate reasoning model needed)
 - **NEW**: Reciprocal Rank Fusion (RRF) hybrid search algorithm
 - **NEW**: httpx-based async HTTP (replaces aiohttp, Streamable HTTP support)
 - **NEW**: Agent tracing/observability support

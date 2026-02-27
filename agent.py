@@ -9,7 +9,7 @@ Dynamic MCP Agent with Azure OpenAI (v1 Responses API + Agents SDK)
 v3.0.0 업데이트 (2026-02-26):
 - [NEW] OpenAI Agents SDK 통합 - 멀티 에이전트 오케스트레이션 (--agents 모드)
 - [NEW] Structured Outputs 지원 (Pydantic v2 스키마 기반 응답)
-- [NEW] o4-mini 추론 모델 지원 (--reasoning 모드)
+- [NEW] GPT-5.2 네이티브 추론 지원 (--reasoning 모드, 별도 추론 모델 불필요)
 - [NEW] 에이전트 트레이싱/관찰성 지원
 - [NEW] 내장 도구 (web_search, file_search, code_interpreter) 네이티브 통합
 - [CHANGED] 기본 모델 gpt-5 → gpt-5.2
@@ -76,7 +76,7 @@ class DynamicMCPAgent:
     - v1 API: 최신 기능에 자동 접근, 버전 관리 불필요
     - 네이티브 MCP 서버 도구: 원격 MCP 서버 직접 연동
     - GPT-5.2 시리즈 지원 (기본 모델)
-    - o4-mini 추론 모델 지원 (수학·논리·코드 분석)
+    - GPT-5.2 네이티브 추론 지원 (수학·논리·코드 분석, 별도 추론 모델 불필요)
     - OpenAI Agents SDK 멀티 에이전트 오케스트레이션
     - Structured Outputs (Pydantic v2 스키마 기반)
     - 스트리밍 응답 지원
@@ -92,7 +92,7 @@ class DynamicMCPAgent:
     Attributes:
         client: OpenAI 클라이언트 (v1 API)
         model: 사용할 모델 배포 이름 (기본: gpt-5.2)
-        reasoning_model: 추론 모델 이름 (기본: o4-mini)
+        reasoning_model: 추론 모델 이름 (기본: gpt-5.2, 네이티브 추론 내장)
         active_tools: 현재 활성화된 도구 목록
         last_response_id: 마지막 응답 ID (대화 체이닝용)
         remote_mcp_servers: 연결된 원격 MCP 서버 목록
@@ -176,7 +176,7 @@ class DynamicMCPAgent:
             deployment_name: 모델 배포 이름
             remote_mcp_servers: 원격 MCP 서버 설정 목록
             enable_streaming: 스트리밍 응답 활성화 여부
-            reasoning_model: 추론 모델 이름 (None이면 비활성화, 예: "o4-mini")
+            reasoning_model: 추론 모델 이름 (None이면 기본 모델 사용, GPT-5.2 네이티브 추론)
             enable_tracing: 트레이싱/관찰성 활성화 여부
         """
         self.azure_endpoint = azure_endpoint or os.getenv("AZURE_OPENAI_ENDPOINT")
@@ -411,7 +411,7 @@ class DynamicMCPAgent:
 
     async def chat_with_reasoning(self, user_message: str) -> str:
         """
-        추론 모델(o4-mini)을 사용하여 복잡한 추론 작업을 수행합니다.
+        GPT-5.2 네이티브 추론을 사용하여 복잡한 추론 작업을 수행합니다.
 
         Args:
             user_message: 사용자 입력 메시지
@@ -419,7 +419,7 @@ class DynamicMCPAgent:
         Returns:
             에이전트 응답
         """
-        model = self.reasoning_model or "o4-mini"
+        model = self.reasoning_model or self.model
         self._conversation_turns += 1
 
         try:

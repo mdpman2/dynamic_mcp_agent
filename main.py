@@ -6,7 +6,7 @@ Azure OpenAI v1 Responses API 기반의 동적 도구 검색 및 로딩 에이�
 
 v3.0.0 업데이트 (2026-02-26):
 - [NEW] --agents 모드: OpenAI Agents SDK 멀티 에이전트 오케스트레이션
-- [NEW] --reasoning 모드: o4-mini 추론 모델 CLI
+- [NEW] --reasoning 모드: GPT-5.2 네이티브 추론 CLI
 - [NEW] Structured Outputs 지원 (Pydantic v2)
 - [CHANGED] 기본 모델 gpt-5 → gpt-5.2
 - [CHANGED] Gradio 웹 UI에 최신 기술 설명 반영
@@ -22,7 +22,7 @@ v2.0.0 업데이트 (2026-02-07):
     python main.py --web        # Gradio 웹 인터페이스로 실행
     python main.py --demo       # 데모 시나리오 실행
     python main.py --stream     # 스트리밍 CLI 모드로 실행
-    python main.py --reasoning  # o4-mini 추론 모델 CLI
+    python main.py --reasoning  # GPT-5.2 네이티브 추론 CLI
     python main.py --agents     # 멀티 에이전트 모드로 실행
 """
 
@@ -72,7 +72,7 @@ def check_environment():
         print("  AZURE_OPENAI_DEPLOYMENT_NAME - 모델 배포명 (예: gpt-5.2, gpt-5)")
         print("\n선택 환경 변수:")
         print("  AZURE_OPENAI_API_VERSION    - v1 API 버전 (preview/latest, 기본: preview)")
-        print("  AZURE_OPENAI_REASONING_MODEL - 추론 모델 (예: o4-mini)")
+        print("  AZURE_OPENAI_REASONING_MODEL - 추론 모델 (기본: gpt-5.2 네이티브 추론)")
         print("\n.env.example 파일을 참고하여 .env 파일을 생성하세요.")
         print("=" * 60)
         return False
@@ -243,7 +243,7 @@ def run_web_mode():
         **2026-02 최신 기술:**
         - 🚀 v1 Responses API - 상태 기반 대화 체이닝 (previous_response_id)
         - 🌐 네이티브 원격 MCP 서버 도구 통합 (Microsoft Learn, GitHub)
-        - 🧠 GPT-5.2 시리즈 + o4-mini 추론 모델 지원
+        - 🧠 GPT-5.2 시리즈 네이티브 추론 지원 (별도 추론 모델 불필요)
         - ⚡ 스트리밍 응답 + 도구 호출 루프 지원
         - 📊 Structured Outputs (Pydantic v2 스키마)
         - 🔀 RRF (Reciprocal Rank Fusion) 하이브리드 검색
@@ -375,18 +375,18 @@ def run_stream_cli_mode():
 
 
 def run_reasoning_cli_mode():
-    """o4-mini 추론 모델 CLI 모드로 에이전트를 실행합니다."""
+    """GPT-5.2 네이티브 추론 CLI 모드로 에이전트를 실행합니다."""
     from dynamic_mcp_agent import create_agent
 
     print("\n" + "=" * 60)
-    print("🧠 Dynamic MCP Agent - 추론 모드 (o4-mini)")
+    print("🧠 Dynamic MCP Agent - 추론 모드 (GPT-5.2 네이티브)")
     print("=" * 60)
-    print("복잡한 추론 작업에 특화된 o4-mini 모델을 사용합니다.")
+    print("GPT-5.2의 네이티브 추론 기능을 사용합니다.")
     print("수학, 논리, 코드 분석 등 깊은 사고가 필요한 작업에 적합합니다.")
     print("'quit' 또는 'exit'를 입력하면 종료됩니다.")
     print("=" * 60 + "\n")
 
-    agent = create_agent(reasoning_model="o4-mini")
+    agent = create_agent(reasoning_model="gpt-5.2")
 
     while True:
         try:
@@ -513,7 +513,7 @@ def main():
     parser.add_argument(
         "--reasoning",
         action="store_true",
-        help="o4-mini 추론 모델 CLI 모드로 실행"
+        help="GPT-5.2 네이티브 추론 CLI 모드로 실행"
     )
     parser.add_argument(
         "--agents",

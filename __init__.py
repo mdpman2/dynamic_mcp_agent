@@ -6,7 +6,7 @@ Changelog:
   v3.0.0 (2026-02-26)
     - [NEW] OpenAI Agents SDK 통합 - 멀티 에이전트 오케스트레이션 (--agents 모드)
     - [NEW] Structured Outputs 지원 (Pydantic v2 스키마 기반 응답)
-    - [NEW] o4-mini 추론 모델 지원 (--reasoning 모드)
+    - [NEW] GPT-5.2 네이티브 추론 지원 (--reasoning 모드, 별도 추론 모델 불필요)
     - [NEW] Reciprocal Rank Fusion (RRF) 하이브리드 검색 알고리즘
     - [NEW] 5개 신규 도구 추가 (Azure AI Agent Service, Computer Use, MCP Discovery, Structured Output, Realtime Audio)
     - [NEW] httpx 기반 비동기 HTTP (aiohttp 대체, Streamable HTTP 지원)
