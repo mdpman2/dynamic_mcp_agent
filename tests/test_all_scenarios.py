@@ -511,9 +511,9 @@ class TestScenario4_Agent(unittest.TestCase):
         agent = DynamicMCPAgent(
             azure_endpoint="https://test.openai.azure.com",
             api_key="test-key",
-            reasoning_model="o4-mini"
+            reasoning_model="gpt-5.2"
         )
-        self.assertEqual(agent.reasoning_model, "o4-mini")
+        self.assertEqual(agent.reasoning_model, "gpt-5.2")
 
     @patch("dynamic_mcp_agent.agent.OpenAI")
     @patch("dynamic_mcp_agent.agent.initialize_mcp_tools")
